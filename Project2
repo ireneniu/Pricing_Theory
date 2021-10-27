@@ -1,0 +1,189 @@
+#!/usr/bin/env python
+# coding: utf-8
+
+# In[4]:
+
+
+#time-based delta hedging 
+import numpy as np
+import scipy.stats as si
+import matplotlib.pyplot as plt
+from sklearn.neighbors import KernelDensity
+
+def dplus(X, K, t, T, r, sigma):
+    return (np.log(X / K) + (r + 0.5 * sigma ** 2) * (T - t)) / (sigma * np.sqrt(T - t))
+
+def dminus(X, K, t, T, r, sigma):
+    return (np.log(X / K) + (r - 0.5 * sigma ** 2) * (T - t)) / (sigma * np.sqrt(T - t))
+
+def put(X, K, t, T, r, sigma):
+    return K * np.exp(-r * (T - t)) * si.norm.cdf(-dminus(X, K, t, T, r, sigma)) - X * si.norm.cdf(-dplus(X, K, t, T, r, sigma))
+
+def delta_put(X, K, t, T, r, sigma):
+    return si.norm.cdf(dplus(X, K, t, T, r, sigma)) - 1
+
+def call(X, K, t, T, r, sigma):
+    return  X * si.norm.cdf(dplus(X, K, t, T, r, sigma)) - K * np.exp(-r * (T - t)) * si.norm.cdf(dminus(X, K, t, T, r, sigma))
+
+def delta_call(X, K, t, T, r, sigma):
+    return si.norm.cdf(dplus(X, K, t, T, r, sigma))
+
+
+# In[5]:
+
+
+S0 = 100
+sigma_P = 0.20 #asset
+sigma_Q = 0.20
+r = 0.02
+mu = 0.1
+T_put = 0.25
+T_call = 0.5
+Time_Intervals = 91
+K = 100
+trans_asset = 0.005
+trans_call = 0.01
+band = 0.05 
+band_list = [0.01, 0.03, 0.07, 0.09, 0.05]
+delta0 = delta_put(S0, K, 0, T_put, r, sigma_Q)
+B0 = put(S0, K, 0, T_put, r, sigma_Q) - delta_put(S0, K, 0, T_put, r, sigma_Q) * (S0 + trans_asset)
+
+
+# In[8]:
+
+
+bands_S = []
+bands_S_move = []
+bands_B = []
+move_times_list = []
+
+sim_num = 100
+
+P_L_time = []
+P_L_move = []
+P_L_num = []
+
+P_L_time_all = []
+P_L_move_all = []
+P_L_num_all = []
+
+for k in range(0, sim_num):
+    P_L_time = []
+    P_L_move = []
+    P_L_num = []
+
+    for i in range(0,len(band_list)):
+        
+        S = [S0]
+        S_move = [S0]
+        B_time = [B0]
+        B_move = [B0]
+        PUT = [put(S0, K, 0, T_put, r, sigma_Q)]
+        deltat_time = [delta0]
+        deltat_move = [delta0]
+        B_move_rebalance = [B0]
+        move_times_plot = [0]
+        np.random.seed(k)
+
+        for t in range(1, Time_Intervals+1): 
+            ann_t = t/365
+            S.append(S[t-1] * np.exp((mu - 0.5 * sigma_P ** 2) * (ann_t-(ann_t-1/365)) + sigma_P * np.sqrt(ann_t-(ann_t-1/365)) * np.random.normal()))
+            deltat_time.append(delta_put(S[t], 100, ann_t, T_put, r, sigma_Q))
+            B_time.append(B_time[t-1] * np.exp(r * (ann_t-(ann_t-1/365))) - (deltat_time[t] - deltat_time[t-1]) * (S[t] + trans_asset))
+            PUT.append(put(S[t], K, ann_t, T_call, r, sigma_Q))
+            
+            if S[t] >= (S_move[-1]*(1 + band_list[i])) or  S[t] <= (S_move[-1]*(1 - band_list[i])):
+                deltat_move.append(delta_put(S[t], K, ann_t, T_put, r, sigma_Q))
+                B_move.append(B_move[-1] * np.exp(r * (ann_t-(ann_t-1/365))) - (deltat_move[-1] - deltat_move[-2]) * (S[t] + trans_asset))
+                S_move.append(S[t])
+                move_times_plot.append(t)
+                B_move_rebalance.append(B_move[-1])
+            else:
+                B_move.append(B_move[-1] * np.exp(r * (ann_t-(ann_t-1/365))))
+                deltat_move.append(deltat_move[t-1])
+
+        bands_S.append(S)
+        bands_B.append(B_move)
+        bands_S_move.append(S_move)
+        move_times_list.append(move_times_plot)
+    
+        P_L_move.append(B_move[-1] + deltat_move[-1]*S[-1] - PUT[-1])
+        P_L_time.append(B_time[-1] + deltat_time[-1]*S[-1] - PUT[-1])
+        P_L_num.append(k)
+
+    P_L_move_all.append(P_L_move)
+    P_L_time_all.append(P_L_time)
+    P_L_num_all.append(P_L_num)
+
+kde = KernelDensity(kernel='gaussian', bandwidth=0.2).fit(np.array(P_L_move_all))    
+plt.plot(np.array(P_L_num_all)[:, 0],kde.score_samples(np.array(P_L_move_all)), label = 'kernel density')
+plt.legend()
+plt.grid()
+plt.show()
+
+
+# In[10]:
+
+
+
+time_axis = []
+
+for i in range(Time_Intervals+1):
+    time_axis.append(i)
+    
+for i in range(0, len(band_list)):
+    plt.plot(time_axis, bands_S[i], label="Asset")
+    plt.plot(time_axis, bands_B[i], label="Bank move-based")
+    
+    plt.plot(move_times_list[i], np.multiply(bands_S_move[i],(1+band_list[i])), label = 'band', marker ='o',linestyle = 'None',color = 'red')
+    plt.plot(move_times_list[i], np.multiply(bands_S_move[i],(1-band_list[i])), label = 'band', marker ='o',linestyle = 'None',color = 'red')
+    
+    for j in range(0,len(move_times_list[i])):
+        if j == len(move_times_list[i])-1:
+            plt.hlines(y=np.multiply(bands_S_move[i][j],(1+band_list[i])), xmin = move_times_list[i][j], xmax = Time_Intervals-1,color = 'red')
+            plt.hlines(y=np.multiply(bands_S_move[i][j],(1-band_list[i])), xmin = move_times_list[i][j], xmax = Time_Intervals-1,color = 'red')
+        else:
+            plt.hlines(y=np.multiply(bands_S_move[i][j],(1+band_list[i])), xmin = move_times_list[i][j], xmax = move_times_list[i][j+1],color = 'red')
+            plt.hlines(y=np.multiply(bands_S_move[i][j],(1-band_list[i])), xmin = move_times_list[i][j], xmax = move_times_list[i][j+1],color = 'red')
+
+    plt.grid()
+    plt.xlabel('time')
+    plt.ylabel('value')
+    plt.title('Delta Hedging, band = {}'.format(band_list[i]))
+    plt.legend()
+    plt.show()
+
+plt.plot(time_axis, S, label = 'asset', color='green')
+plt.plot(time_axis, B_time,label="Bank time-based",  color = 'blue')
+plt.plot(time_axis, B_move,label="Bank move-based",  color = 'orange')
+plt.plot(move_times_plot, B_move_rebalance, label = 'move-based rebalance', marker ='o',linestyle = 'None', color='orange')
+
+plt.plot(move_times_plot, np.multiply(S_move,(1+band)), label = 'band', marker ='o',linestyle = 'None',color = 'red')
+plt.plot(move_times_plot, np.multiply(S_move,(1-band)), label = 'band', marker ='o',linestyle = 'None',color = 'red')
+
+
+# In[14]:
+
+
+for i in range(0,len(move_times_plot)):
+    if i == len(move_times_plot)-1:
+        plt.hlines(y=np.multiply(S_move[i],(1+band)), xmin = move_times_plot[i], xmax = Time_Intervals-1,color = 'red')
+        plt.hlines(y=np.multiply(S_move[i],(1-band)), xmin = move_times_plot[i], xmax = Time_Intervals-1,color = 'red')
+    else:
+        plt.hlines(y=np.multiply(S_move[i],(1+band)), xmin = move_times_plot[i], xmax = move_times_plot[i+1],color = 'red')
+        plt.hlines(y=np.multiply(S_move[i],(1-band)), xmin = move_times_plot[i], xmax = move_times_plot[i+1],color = 'red')
+        
+plt.plot(time_axis, PUT, label = 'put', color = 'pink')
+plt.grid()
+plt.xlabel('time')
+plt.ylabel('value')
+plt.title('Delta-Gamma Hedging')
+plt.legend()
+plt.show()
+
+
+# In[ ]:
+
+
+
+
